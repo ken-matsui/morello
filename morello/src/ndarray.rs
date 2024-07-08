@@ -7,6 +7,7 @@ use std::ops::{Index, Range};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NDArray<T> {
+    is_row_major: bool,
     pub data: RleVec<T>,
     // TODO: Not necessary to store shape or strides, which can be stored externally in database.
     shape: Vec<usize>,
@@ -83,6 +84,8 @@ impl<T: Clone + Eq> NDArray<T> {
         let strides = calculate_strides(shape);
         assert_eq!(buffer.len(), volume, "Buffer size must match shape.");
         Self {
+            // permutation: (0..shape.len()).collect(),
+            is_row_major: true,
             data: buffer,
             shape: shape.to_vec(),
             strides,
@@ -93,7 +96,43 @@ impl<T: Clone + Eq> NDArray<T> {
         let index = self.data_offset(pt);
         self.data.set(index, value);
     }
+
+    pub fn compress(&mut self) {
+        if !self.is_row_major {
+            // We already compressed the data.
+            println!("Already compressed");
+            return;
+        }
+        let row_major_runs_len = self.data.runs_len();
+
+        // let per_row = 2;
+        'outer: for per_row in 2..self.data.len() / 2 {
+            let mut new_data = RleVec::new();
+            for i in 0..per_row {
+                for j in (i..self.data.len()).step_by(per_row) {
+                    new_data.push(self.data[j].clone());
+                    if new_data.runs_len() >= row_major_runs_len {
+                        self.is_row_major = true;
+                        continue 'outer;
+                    }
+                }
+            }
+
+            // frequent per_row: 4, 31, 124, 496
+            println!(
+                "Compressed from {} to {} at {}",
+                row_major_runs_len,
+                new_data.runs_len(),
+                per_row
+            );
+            self.is_row_major = false;
+            self.data = new_data;
+            break;
+        }
+    }
 }
+
+impl<T: Eq> NDArray<T> {}
 
 impl<T: Default + Clone + Eq> NDArray<T> {
     pub fn new(shape: &[usize]) -> Self {

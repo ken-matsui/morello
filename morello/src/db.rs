@@ -45,7 +45,7 @@ const THREAD_SHARDS: usize = 2;
 const SUPERBLOCK_FACTOR: BimapInt = 2;
 const CHANNEL_SIZE: usize = 2;
 /// Compress superblocks when writing to disk.
-const COMPRESS_SUPERBLOCKS: bool = true;
+const COMPRESS_SUPERBLOCKS: bool = false;
 
 pub struct FilesDatabase {
     #[allow(dead_code)] // read only when db-stats enabled; otherwise only affects Drop
@@ -657,7 +657,7 @@ impl Shard {
                                 .send(ShardThreadResponse::Loaded(key, result))
                                 .unwrap();
                         }
-                        Ok(ShardThreadMsg::Put(key, value)) => {
+                        Ok(ShardThreadMsg::Put(key, mut value)) => {
                             let path = superblock_file_path(db_root.path(), &key);
 
                             #[cfg(feature = "db-stats")]
@@ -685,6 +685,13 @@ impl Shard {
                                 zstd_writer.finish().unwrap();
                             } else {
                                 let mut buf_writer = BufWriter::new(file);
+                                for (_, v) in value.iter_mut() {
+                                    let DbBlock::Whole(e) = v;
+                                    e.filled.compress();
+                                    e.main_costs.compress();
+                                    e.peaks.compress();
+                                    e.depths_actions.compress();
+                                }
                                 bincode::serialize_into(&mut buf_writer, &value).unwrap();
                                 buf_writer.flush().unwrap();
                             }
