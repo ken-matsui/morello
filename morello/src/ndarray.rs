@@ -1,5 +1,7 @@
 use crate::utils::iter_multidim_range;
+
 use divrem::DivRem;
+use itertools::Itertools;
 use rle_vec::RleVec;
 use serde::{Deserialize, Serialize};
 
@@ -7,12 +9,17 @@ use std::ops::{Index, Range};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NDArray<T> {
-    is_row_major: bool,
     pub data: RleVec<T>,
     // TODO: Not necessary to store shape or strides, which can be stored externally in database.
-    shape: Vec<usize>,
+    permutation: Vec<usize>,
+    shape: Vec<usize>, // 10 to 20, take one shape.
     strides: Vec<usize>,
 }
+// permutation = [1, 0]
+// def index(original):
+// new_pt = [original[permutation[i]] for i in 0..permutation.len()]
+// offset = sum(strides[i] * new_pt[i] for i in 0..permutation.len())
+// return self.data[offset]
 
 impl<T> NDArray<T> {
     /// Return the index of an arbitrary value which matches `predicate`.
@@ -84,9 +91,8 @@ impl<T: Clone + Eq> NDArray<T> {
         let strides = calculate_strides(shape);
         assert_eq!(buffer.len(), volume, "Buffer size must match shape.");
         Self {
-            // permutation: (0..shape.len()).collect(),
-            is_row_major: true,
             data: buffer,
+            permutation: (0..shape.len()).collect_vec(),
             shape: shape.to_vec(),
             strides,
         }
@@ -96,43 +102,58 @@ impl<T: Clone + Eq> NDArray<T> {
         let index = self.data_offset(pt);
         self.data.set(index, value);
     }
-
-    pub fn compress(&mut self) {
-        if !self.is_row_major {
-            // We already compressed the data.
-            println!("Already compressed");
-            return;
-        }
-        let row_major_runs_len = self.data.runs_len();
-
-        // let per_row = 2;
-        'outer: for per_row in 2..self.data.len() / 2 {
-            let mut new_data = RleVec::new();
-            for i in 0..per_row {
-                for j in (i..self.data.len()).step_by(per_row) {
-                    new_data.push(self.data[j].clone());
-                    if new_data.runs_len() >= row_major_runs_len {
-                        self.is_row_major = true;
-                        continue 'outer;
-                    }
-                }
-            }
-
-            // frequent per_row: 4, 31, 124, 496
-            println!(
-                "Compressed from {} to {} at {}",
-                row_major_runs_len,
-                new_data.runs_len(),
-                per_row
-            );
-            self.is_row_major = false;
-            self.data = new_data;
-            break;
-        }
-    }
 }
 
-impl<T: Eq> NDArray<T> {}
+impl<T: Clone + Into<f64>> NDArray<T> {
+    fn best_permutation(&self) -> Vec<usize> {
+        (0..self.shape.len())
+            .map(|idx| {
+                let mut permutation = (0..self.shape.len()).collect_vec();
+                permutation.swap(0, idx);
+                permutation
+            })
+            .map(|permutation| {
+                let values = permutation
+                    .iter()
+                    .map(|&idx| 0..self.shape[idx])
+                    .multi_cartesian_product()
+                    .chunk_by(|dims| dims[0])
+                    .into_iter()
+                    .map(|(_, group)| {
+                        group
+                            .map(|dims| permutation.iter().map(|&idx| dims[idx]).collect_vec())
+                            .map(|indices| self[&indices].clone().into())
+                            .collect_vec()
+                    })
+                    .collect_vec();
+
+                (permutation, values)
+            })
+            .map(|(permutation, values)| {
+                let variance = values
+                    .into_iter()
+                    .map(|vs| {
+                        let n = vs.len() as f64;
+                        let mean = vs.iter().sum::<f64>() / n;
+                        vs.into_iter().map(|x| (x - mean).powf(2.0)).sum::<f64>() / n
+                    })
+                    .sum::<f64>();
+
+                (permutation, variance)
+            })
+            .min_by(|(_, var1), (_, var2)| var1.partial_cmp(var2).unwrap())
+            .unwrap()
+            .0
+    }
+
+    pub fn reorder_dimensions(&mut self) {
+        println!("{:?}", self.shape);
+
+        // TODO: Call best_permutation.
+        // TODO: Reorder dimensions based on variance.
+        // TODO: Transpose NDArray.
+    }
+}
 
 impl<T: Default + Clone + Eq> NDArray<T> {
     pub fn new(shape: &[usize]) -> Self {
