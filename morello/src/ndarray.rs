@@ -92,7 +92,7 @@ impl<T: Clone + Eq> NDArray<T> {
         assert_eq!(buffer.len(), volume, "Buffer size must match shape.");
         Self {
             data: buffer,
-            permutation: (0..shape.len()).collect_vec(),
+            permutation: (0..shape.len()).collect(),
             shape: shape.to_vec(),
             strides,
         }
@@ -113,15 +113,24 @@ impl<T: Ord> NDArray<T> {
                 permutation
             })
             .map(|permutation| {
-                let runs_len = permutation
+                let mut runs_len: usize = 0;
+                let mut prev_value = None;
+                let mut indices = vec![0; self.shape.len()];
+
+                for dims in permutation
                     .iter()
                     .map(|&idx| 0..self.shape[idx])
                     .multi_cartesian_product()
-                    .map(|indices| permutation.iter().map(|&idx| indices[idx]).collect_vec())
-                    .map(|indices| &self[&indices])
-                    .chunk_by(|&x| x)
-                    .into_iter()
-                    .count();
+                {
+                    for (i, &perm) in permutation.iter().enumerate() {
+                        indices[i] = dims[perm];
+                    }
+                    let value = &self[&indices];
+                    if prev_value.map_or(true, |v| v != value) {
+                        runs_len += 1;
+                        prev_value = Some(value);
+                    }
+                }
 
                 (permutation, runs_len)
             })
@@ -131,7 +140,12 @@ impl<T: Ord> NDArray<T> {
     }
 
     pub fn reorder_dimensions(&mut self) {
-        println!("{:?}", self.shape);
+        // println!("{:?}", self.shape);
+
+        let permutation = self.best_permutation();
+        if self.permutation != permutation {
+            println!("{:?}", permutation);
+        }
 
         // TODO: Call best_permutation.
         // TODO: Reorder dimensions based on variance.
