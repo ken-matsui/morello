@@ -12,7 +12,7 @@ pub struct NDArray<T> {
     pub data: RleVec<T>,
     // TODO: Not necessary to store shape or strides, which can be stored externally in database.
     permutation: Vec<usize>,
-    shape: Vec<usize>, // 10 to 20, take one shape.
+    shape: Vec<usize>,
     strides: Vec<usize>,
 }
 // permutation = [1, 0]
@@ -104,7 +104,7 @@ impl<T: Clone + Eq> NDArray<T> {
     }
 }
 
-impl<T: Clone + Into<f64>> NDArray<T> {
+impl<T: Ord> NDArray<T> {
     fn best_permutation(&self) -> Vec<usize> {
         (0..self.shape.len())
             .map(|idx| {
@@ -113,35 +113,19 @@ impl<T: Clone + Into<f64>> NDArray<T> {
                 permutation
             })
             .map(|permutation| {
-                let values = permutation
+                let runs_len = permutation
                     .iter()
                     .map(|&idx| 0..self.shape[idx])
                     .multi_cartesian_product()
-                    .chunk_by(|dims| dims[0])
+                    .map(|indices| permutation.iter().map(|&idx| indices[idx]).collect_vec())
+                    .map(|indices| &self[&indices])
+                    .chunk_by(|&x| x)
                     .into_iter()
-                    .map(|(_, group)| {
-                        group
-                            .map(|dims| permutation.iter().map(|&idx| dims[idx]).collect_vec())
-                            .map(|indices| self[&indices].clone().into())
-                            .collect_vec()
-                    })
-                    .collect_vec();
+                    .count();
 
-                (permutation, values)
+                (permutation, runs_len)
             })
-            .map(|(permutation, values)| {
-                let variance = values
-                    .into_iter()
-                    .map(|vs| {
-                        let n = vs.len() as f64;
-                        let mean = vs.iter().sum::<f64>() / n;
-                        vs.into_iter().map(|x| (x - mean).powf(2.0)).sum::<f64>() / n
-                    })
-                    .sum::<f64>();
-
-                (permutation, variance)
-            })
-            .min_by(|(_, var1), (_, var2)| var1.partial_cmp(var2).unwrap())
+            .min_by_key(|(_, runs_len)| *runs_len)
             .unwrap()
             .0
     }
