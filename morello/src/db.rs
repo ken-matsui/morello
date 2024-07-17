@@ -689,7 +689,7 @@ impl Shard {
                                     let DbBlock::Whole(e) = v;
                                     e.filled.reorder_dimensions();
                                     e.main_costs.reorder_dimensions();
-                                    // e.peaks.reorder_dimensions();
+                                    e.peaks.reorder_dimensions();
                                     e.depths_actions.reorder_dimensions();
                                 }
                                 bincode::serialize_into(&mut buf_writer, &value).unwrap();

@@ -15,11 +15,6 @@ pub struct NDArray<T> {
     shape: Vec<usize>,
     strides: Vec<usize>,
 }
-// permutation = [1, 0]
-// def index(original):
-// new_pt = [original[permutation[i]] for i in 0..permutation.len()]
-// offset = sum(strides[i] * new_pt[i] for i in 0..permutation.len())
-// return self.data[offset]
 
 impl<T> NDArray<T> {
     /// Return the index of an arbitrary value which matches `predicate`.
@@ -28,6 +23,7 @@ impl<T> NDArray<T> {
         Self: Sized,
         P: FnMut(&T) -> bool,
     {
+        // TODO: Fix this regarding permutation modification?
         for (idx, val) in self.data.iter().enumerate() {
             if predicate(val) {
                 let mut multidim_idx = Vec::with_capacity(self.shape.len());
@@ -102,9 +98,29 @@ impl<T: Clone + Eq> NDArray<T> {
         let index = self.data_offset(pt);
         self.data.set(index, value);
     }
+
+    pub fn reorder_dimensions(&mut self) {
+        let permutation = self.best_permutation();
+        if self.permutation == permutation {
+            return;
+        }
+
+        // TODO: Use set to avoid copying data.
+        // TODO: More swap-like operations instead of full reorder.
+        self.data = permutation
+            .iter()
+            .map(|&idx| 0..self.shape[idx])
+            .multi_cartesian_product()
+            .map(|dims| permutation.iter().map(|&idx| dims[idx]).collect_vec())
+            .map(|indices| self[&indices].clone())
+            .collect();
+        self.permutation = permutation;
+    }
 }
 
-impl<T: Ord> NDArray<T> {
+impl<T: Eq> NDArray<T> {
+    /// Find the best permutation for the current data by choosing the minimum
+    /// number of runs among permutations where each dimension is innermost.
     fn best_permutation(&self) -> Vec<usize> {
         (0..self.shape.len())
             .map(|idx| {
@@ -138,19 +154,6 @@ impl<T: Ord> NDArray<T> {
             .unwrap()
             .0
     }
-
-    pub fn reorder_dimensions(&mut self) {
-        // println!("{:?}", self.shape);
-
-        let permutation = self.best_permutation();
-        if self.permutation != permutation {
-            println!("{:?}", permutation);
-        }
-
-        // TODO: Call best_permutation.
-        // TODO: Reorder dimensions based on variance.
-        // TODO: Transpose NDArray.
-    }
 }
 
 impl<T: Default + Clone + Eq> NDArray<T> {
@@ -167,10 +170,10 @@ impl<T> NDArray<T> {
             self.shape.len(),
             "Number of indices must match the number of dimensions."
         );
-        indices
+        self.permutation
             .iter()
-            .zip(&self.strides)
-            .map(|(&idx, &stride)| idx * stride)
+            .enumerate()
+            .map(|(idx, &perm)| self.strides[idx] * indices[perm])
             .sum()
     }
 
@@ -308,6 +311,7 @@ impl<T> NDArray<T> {
                 fill_len = extended_idx - index;
             }
         }
+        // TODO: Fix this regarding permutation modification.
         data.set_range(index, fill_len, value);
         hint_to_return
     }
@@ -354,6 +358,7 @@ impl<T> NDArray<T> {
         iter_multidim_range(&dim_ranges_ext, &self.strides, |index, pt| {
             // TODO: This still iterates over k. Instead, this should skip remaining k.
             if let Some(next_value) = slice_iter.next() {
+                // TODO: Fix this regarding permutation modification.
                 last_run_idx = self.data.set_hint(index, next_value, last_run_idx);
             }
             if pt[pt.len() - 1] == k - 1 {
@@ -464,5 +469,29 @@ mod tests {
         let mut arr = NDArray::new_with_value(&[3, 3, 1], 0);
         arr.fill_region_ext(&[0..3, 1..2, 0..1], 1, Some((0, &filled)));
         assert_eq!(arr.data.to_vec(), vec![0, 1, 0, 0, 1, 1, 0, 1, 1]);
+    }
+
+    #[test]
+    fn test_reorder_dimensions() {
+        let mut arr = NDArray::new_from_buffer(&[2, 2, 2], vec![0, 1, 0, 1, 0, 1, 0, 1]);
+        assert_eq!(arr.data.runs_len(), 8);
+        for i in 0..2 {
+            for j in 0..2 {
+                for k in 0..2 {
+                    assert_eq!(arr[&[i, j, k]], k);
+                }
+            }
+        }
+
+        arr.reorder_dimensions();
+
+        assert_eq!(arr.data.runs_len(), 2);
+        for i in 0..2 {
+            for j in 0..2 {
+                for k in 0..2 {
+                    assert_eq!(arr[&[i, j, k]], k);
+                }
+            }
+        }
     }
 }
