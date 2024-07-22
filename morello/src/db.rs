@@ -931,7 +931,7 @@ impl WholeBlock {
         {
             let mut guard = self.access_counts.lock();
             let l =
-                guard.get_or_insert_with(|| NDArray::new_with_value(self.filled.shape(), false));
+                guard.get_or_insert_with(|| NDArray::new_with_value(&self.filled.shape(), false));
             l.fill_region(dim_ranges, true);
         }
     }
@@ -973,7 +973,7 @@ impl WholeBlock {
     #[cfg(feature = "db-stats")]
     fn log_access(&self, pt: &[usize]) {
         let mut guard = self.access_counts.lock();
-        let l = guard.get_or_insert_with(|| NDArray::new_with_value(self.filled.shape(), false));
+        let l = guard.get_or_insert_with(|| NDArray::new_with_value(&self.filled.shape(), false));
         l.set_pt(pt, true);
     }
 
