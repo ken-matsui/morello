@@ -853,7 +853,7 @@ impl DbBlock {
         }
     }
 
-    pub fn shape(&self) -> &[usize] {
+    pub fn shape(&self) -> Vec<usize> {
         match self {
             DbBlock::Whole(e) => e.shape(),
         }
@@ -906,7 +906,7 @@ impl WholeBlock {
         debug_assert_eq!(dim_ranges.len(), shape.len());
 
         let mut shape_with_k = Vec::with_capacity(shape.len() + 1);
-        shape_with_k.extend_from_slice(shape);
+        shape_with_k.extend_from_slice(&shape);
         shape_with_k.push(k.into());
 
         self.filled
@@ -966,7 +966,7 @@ impl WholeBlock {
         ))
     }
 
-    pub fn shape(&self) -> &[usize] {
+    pub fn shape(&self) -> Vec<usize> {
         self.filled.shape()
     }
 

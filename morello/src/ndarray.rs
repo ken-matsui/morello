@@ -12,8 +12,8 @@ pub struct NDArray<T> {
     pub data: RleVec<T>,
     // TODO: Not necessary to store shape or strides, which can be stored externally in database.
     permutation: Vec<usize>,
-    shape: Vec<usize>,
-    strides: Vec<usize>,
+    permutated_shape: Vec<usize>,
+    permutated_strides: Vec<usize>,
 }
 
 impl<T> NDArray<T> {
@@ -26,15 +26,15 @@ impl<T> NDArray<T> {
         // TODO: Fix this regarding permutation modification?
         for (idx, val) in self.data.iter().enumerate() {
             if predicate(val) {
-                let mut multidim_idx = Vec::with_capacity(self.shape.len());
+                let mut multidim_idx = Vec::with_capacity(self.permutated_shape.len());
                 let mut remaining = idx;
-                for &stride in &self.strides {
+                for &stride in &self.permutated_strides {
                     let (d, r) = remaining.div_rem(stride);
                     multidim_idx.push(d);
                     remaining = r;
                 }
                 debug_assert_eq!(remaining, 0);
-                debug_assert_eq!(multidim_idx.len(), self.shape.len());
+                debug_assert_eq!(multidim_idx.len(), self.permutated_shape.len());
                 return Some(multidim_idx);
             }
         }
@@ -89,8 +89,8 @@ impl<T: Clone + Eq> NDArray<T> {
         Self {
             data: buffer,
             permutation: (0..shape.len()).collect(),
-            shape: shape.to_vec(),
-            strides,
+            permutated_shape: shape.to_vec(),
+            permutated_strides: strides,
         }
     }
 
@@ -107,13 +107,20 @@ impl<T: Clone + Eq> NDArray<T> {
 
         // TODO: Use set to avoid copying data.
         // TODO: More swap-like operations instead of full reorder.
+        // TODO: if we can use the same run, then we can just copy it instead of cloning the whole elements within the run.
+        // TODO: in-place?
         self.data = permutation
             .iter()
-            .map(|&idx| 0..self.shape[idx])
+            .map(|&idx| 0..self.permutated_shape[idx])
             .multi_cartesian_product()
             .map(|dims| permutation.iter().map(|&idx| dims[idx]).collect_vec())
             .map(|indices| self[&indices].clone())
             .collect();
+        self.permutated_shape = permutation
+            .iter()
+            .map(|&idx| self.permutated_shape[idx])
+            .collect_vec();
+        self.permutated_strides = calculate_strides(&self.permutated_shape);
         self.permutation = permutation;
     }
 }
@@ -122,20 +129,20 @@ impl<T: Eq> NDArray<T> {
     /// Find the best permutation for the current data by choosing the minimum
     /// number of runs among permutations where each dimension is innermost.
     fn best_permutation(&self) -> Vec<usize> {
-        (0..self.shape.len())
+        (0..self.permutated_shape.len())
             .map(|idx| {
-                let mut permutation = (0..self.shape.len()).collect_vec();
+                let mut permutation = (0..self.permutated_shape.len()).collect_vec();
                 permutation.swap(0, idx);
                 permutation
             })
             .map(|permutation| {
                 let mut runs_len: usize = 0;
                 let mut prev_value = None;
-                let mut indices = vec![0; self.shape.len()];
+                let mut indices = vec![0; self.permutated_shape.len()];
 
                 for dims in permutation
                     .iter()
-                    .map(|&idx| 0..self.shape[idx])
+                    .map(|&idx| 0..self.permutated_shape[idx])
                     .multi_cartesian_product()
                 {
                     for (i, &perm) in permutation.iter().enumerate() {
@@ -167,26 +174,26 @@ impl<T> NDArray<T> {
     fn data_offset(&self, indices: &[usize]) -> usize {
         assert_eq!(
             indices.len(),
-            self.shape.len(),
+            self.permutated_shape.len(),
             "Number of indices must match the number of dimensions."
         );
         self.permutation
             .iter()
             .enumerate()
-            .map(|(idx, &perm)| self.strides[idx] * indices[perm])
+            .map(|(idx, &perm)| self.permutated_strides[idx] * indices[perm])
             .sum()
     }
 
-    pub fn strides(&self) -> &[usize] {
-        &self.strides
-    }
-
-    pub fn shape(&self) -> &[usize] {
-        &self.shape
+    pub fn shape(&self) -> Vec<usize> {
+        // Returns the original shape.
+        self.permutation
+            .iter()
+            .map(|&idx| self.permutated_shape[idx])
+            .collect_vec()
     }
 
     pub fn volume(&self) -> usize {
-        self.shape.iter().product()
+        self.permutated_shape.iter().product()
     }
 
     pub fn len(&self) -> usize {
@@ -210,13 +217,13 @@ impl<T> NDArray<T> {
     {
         // Compute the volume of contiguous inner tiles (`step_size`) in `self`. `prefix_len` will
         // be the number of dimensions at the head of `dim_ranges` outside contig. tiles.
-        let mut prefix_size = self.shape.len();
+        let mut prefix_size = self.permutated_shape.len();
         let mut step_size: u32 = 1;
-        for (&sh, dr) in self.shape().iter().zip(dim_ranges).rev() {
+        for (&sh, dr) in self.permutated_shape.iter().zip(dim_ranges).rev() {
             if sh != dr.len() {
                 break;
             }
-            step_size *= u32::try_from(sh).unwrap();
+            step_size *= u32::try_from(sh).unwrap(); // TODO: this should have been strides?
             prefix_size -= 1;
         }
 
@@ -244,7 +251,7 @@ impl<T> NDArray<T> {
             );
         } else {
             let mut run_index_hint = None;
-            let substrides = &self.strides[..(prefix_size - 1)];
+            let substrides = &self.permutated_strides[..(prefix_size - 1)];
             iter_multidim_range(&dim_ranges[..(prefix_size - 1)], substrides, |i, _| {
                 run_index_hint = Self::fill_region_ext_inner(
                     &mut self.data,
@@ -326,12 +333,12 @@ impl<T> NDArray<T> {
         I: Clone + Iterator<Item = T>,
     {
         if let Some(filled) = filled {
-            assert_eq!(dim_ranges.len(), filled.shape().len());
+            assert_eq!(dim_ranges.len(), filled.permutated_shape.len());
         }
 
         // Update dim_ranges with a Range for the k dimension, which will be (partially) filled with
         // repeated copies out of inner_slice_iter.
-        let k = u32::try_from(self.shape[self.shape.len() - 1]).unwrap();
+        let k = u32::try_from(self.permutated_shape[self.permutated_shape.len() - 1]).unwrap();
         let mut dim_ranges_ext = Vec::with_capacity(dim_ranges.len() + 1);
         dim_ranges_ext.extend_from_slice(dim_ranges);
         dim_ranges_ext.push(0..k);
@@ -355,7 +362,7 @@ impl<T> NDArray<T> {
         let inner_slice_iter = inner_slice_iter.fuse();
         let mut slice_iter = inner_slice_iter.clone();
         let mut last_run_idx = 0;
-        iter_multidim_range(&dim_ranges_ext, &self.strides, |index, pt| {
+        iter_multidim_range(&dim_ranges_ext, &self.permutated_strides, |index, pt| {
             // TODO: This still iterates over k. Instead, this should skip remaining k.
             if let Some(next_value) = slice_iter.next() {
                 // TODO: Fix this regarding permutation modification.
